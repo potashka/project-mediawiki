@@ -1,0 +1,24 @@
+all:
+  children:
+    nginx:
+      hosts:
+        nginx-lb:
+          ansible_host: <IP_NGINX>
+    mediawiki:
+      hosts:
+        mediawiki-1:
+          ansible_host: <IP_MEDIAWIKI_1>
+        mediawiki-2:
+          ansible_host: <IP_MEDIAWIKI_2>
+    postgres_master:
+      hosts:
+        pg-master:
+          ansible_host: <IP_PG_MASTER>
+    postgres_replica:
+      hosts:
+        pg-replica:
+          ansible_host: <IP_PG_REPLICA>
+    zabbix:
+      hosts:
+        backup-zabbix:
+          ansible_host: <IP_BACKUP>

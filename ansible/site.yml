@@ -1,0 +1,35 @@
+---
+- name: Install MediaWiki nodes
+  hosts: mediawiki
+  become: true
+  roles:
+    - mediawiki
+
+- name: Setup PostgreSQL master
+  hosts: postgres_master
+  become: true
+  roles:
+    - postgres
+
+- name: Setup PostgreSQL replica
+  hosts: postgres_replica
+  become: true
+  roles:
+    - postgres
+
+- name: Setup NGINX load balancer
+  hosts: nginx
+  become: true
+  roles:
+    - nginx
+
+- name: Setup Zabbix and backup
+  hosts: zabbix
+  become: true
+  roles:
+    - zabbix
+
+- name: Install Zabbix agent on all nodes
+  hosts: all
+  roles:
+    - common

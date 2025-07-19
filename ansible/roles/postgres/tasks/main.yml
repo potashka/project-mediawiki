@@ -1,0 +1,85 @@
+---
+- name: Install PostgreSQL
+  apt:
+    name: postgresql
+    state: present
+    update_cache: yes
+
+- name: Ensure PostgreSQL is running
+  service:
+    name: postgresql
+    state: started
+    enabled: true
+
+- name: Create DB user
+  become_user: postgres
+  postgresql_user:
+    name: wikiuser
+    password: wikisecret
+    role_attr_flags: CREATEDB
+
+- name: Create DB
+  become_user: postgres
+  postgresql_db:
+    name: my_wiki
+    owner: wikiuser
+
+- name: Configure postgresql.conf for replication
+  lineinfile:
+    path: /etc/postgresql/14/main/postgresql.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^#?wal_level', line: 'wal_level = replica' }
+    - { regexp: '^#?max_wal_senders', line: 'max_wal_senders = 3' }
+    - { regexp: '^#?wal_keep_size', line: 'wal_keep_size = 64' }
+    - { regexp: '^#?listen_addresses', line: "listen_addresses = '*'" }
+  when: "'postgres_master' in group_names"
+
+- name: Allow replication connections in pg_hba.conf
+  blockinfile:
+    path: /etc/postgresql/14/main/pg_hba.conf
+    marker: "# {mark} ANSIBLE MANAGED REPL"
+    block: |
+      host replication replicator {{ hostvars['pg-replica'].ansible_host }}/32 md5
+  when: "'postgres_master' in group_names"
+
+- name: Restart PostgreSQL on master
+  service:
+    name: postgresql
+    state: restarted
+  when: "'postgres_master' in group_names"
+
+- name: Create replication user
+  become_user: postgres
+  postgresql_user:
+    name: replicator
+    password: replicate123
+    role_attr_flags: REPLICATION
+  when: "'postgres_master' in group_names"
+
+- name: Stop PostgreSQL on replica
+  service:
+    name: postgresql
+    state: stopped
+  when: "'postgres_replica' in group_names"
+
+- name: Remove old PG data directory on replica
+  file:
+    path: /var/lib/postgresql/14/main
+    state: absent
+  when: "'postgres_replica' in group_names"
+
+- name: Run pg_basebackup from replica
+  become_user: postgres
+  shell: |
+    pg_basebackup -h {{ hostvars['pg-master'].ansible_host }} -D /var/lib/postgresql/14/main -U replicator -Fp -Xs -P -R
+  environment:
+    PGPASSWORD: replicate123
+  when: "'postgres_replica' in group_names"
+
+- name: Start PostgreSQL on replica
+  service:
+    name: postgresql
+    state: started
+  when: "'postgres_replica' in group_names"

@@ -1,0 +1,39 @@
+---
+- name: Install MediaWiki dependencies
+  apt:
+    name:
+      - php
+      - php-intl
+      - php-mbstring
+      - php-xml
+      - php-apcu
+      - php-curl
+      - wget
+      - tar
+    update_cache: yes
+
+- name: Download MediaWiki
+  get_url:
+    url: https://releases.wikimedia.org/mediawiki/1.42/mediawiki-1.42.1.tar.gz
+    dest: /tmp/mediawiki.tar.gz
+
+- name: Extract MediaWiki
+  unarchive:
+    src: /tmp/mediawiki.tar.gz
+    dest: /var/www/html/
+    remote_src: yes
+
+- name: Set permissions
+  file:
+    path: /var/www/html/mediawiki-1.42.1
+    owner: www-data
+    group: www-data
+    recurse: yes
+
+- name: Ensure images directory exists
+  file:
+    path: /var/www/html/mediawiki-1.42.1/images
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
