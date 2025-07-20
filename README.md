@@ -154,27 +154,25 @@ ansible/
 ```
 
 ---
-## Схема проекта
+## 📦 Схема проекта
 
-👤 [User] 
-   ↓
-☁️ [Интернет]
-   ↓
-🧮 [nginx-lb] — балансировщик
-   ↓               ↓
-🖥️ [mediawiki-1]   🖥️ [mediawiki-2]
-     ↓                   ↓
-🛢️ [pg-master]  ←  репликация  → 🛢️ [pg-replica]
+```mermaid
+graph TD
+    A[👤 User] --> B[☁️ Интернет]
+    B --> C[🧮 nginx-lb]
+    C --> D1[🖥️ mediawiki-1]
+    C --> D2[🖥️ mediawiki-2]
+    D1 --> E[🛢️ pg-master]
+    D2 --> E[🛢️ pg-master]
+    E --> F[🛢️ pg-replica]
 
-           🔄 Streaming replication
-
-🛡️ [backup-zabbix] — мониторинг + бэкап
-     ↘ fs backup → [mediawiki-1]
-     ↘ fs backup → [mediawiki-2]
-     ↘ pg_dump   → [pg-master]
-
-     ↘ мониторинг → [nginx-lb]
-     ↘ мониторинг → [pg-replica]
+    G[🛡️ backup-zabbix]
+    G --> E
+    G --> D1
+    G --> D2
+    G --> C
+    G --> F
+```
 
 ---
 
