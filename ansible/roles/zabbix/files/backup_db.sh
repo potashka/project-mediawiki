@@ -1,12 +1,14 @@
 #!/bin/bash
 set -e
 
-DB="my_wiki"
-USER="wikiuser"
-DEST="/opt/backups/db"
+DB_NAME="my_wiki"
+DB_USER="wikiuser"
+DEST_DIR="/opt/backups/db"
 DATE=$(date +%F)
 
-mkdir -p "$DEST"
-pg_dump -U "$USER" "$DB" | gzip > "$DEST/wiki_db_$DATE.sql.gz"
+mkdir -p "$DEST_DIR"
+BACKUP_PATH="$DEST_DIR/${DB_NAME}_$DATE.sql.gz"
 
-echo "[INFO] Database backup completed at $DEST/wiki_db_$DATE.sql.gz"
+pg_dump -U "$DB_USER" "$DB_NAME" | gzip > "$BACKUP_PATH" && \
+  echo "[INFO] Backup базы данных создан: $BACKUP_PATH" || \
+  { echo "[ERROR] Не удалось создать дамп БД"; exit 1; }
