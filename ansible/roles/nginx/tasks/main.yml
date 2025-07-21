@@ -1,10 +1,11 @@
----
+# Установить nginx
 - name: Install nginx
   apt:
     name: nginx
     state: present
     update_cache: yes
 
+# Копировать кастомный nginx.conf (смотри ниже)
 - name: Copy nginx config
   copy:
     src: nginx.conf
@@ -13,6 +14,7 @@
     group: root
     mode: '0644'
 
+# Добавить записи в /etc/hosts для обоих wiki
 - name: Add mediawiki-1 to /etc/hosts
   lineinfile:
     path: /etc/hosts
@@ -25,6 +27,7 @@
     line: "{{ hostvars['mediawiki-2'].ansible_host }} mediawiki-2"
     state: present
 
+# Перезапустить nginx
 - name: Restart nginx
   service:
     name: nginx

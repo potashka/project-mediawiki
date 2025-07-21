@@ -1,0 +1,81 @@
+# ansible/roles/postgres_master/tasks/main.yml
+- name: Установить gnupg
+  apt:
+    name: gnupg
+    state: present
+    update_cache: yes
+
+- name: Импортировать GPG-ключ репозитория PostgreSQL
+  apt_key:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    state: present
+
+- name: Добавить официальный репозиторий PostgreSQL
+  apt_repository:
+    repo: "deb http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
+    state: present
+    filename: "pgdg"
+
+- name: Обновить кеш пакетов
+  apt:
+    update_cache: yes
+
+- name: Установка PostgreSQL
+  apt:
+    name:
+      - "postgresql-{{ postgres_version }}"
+      - "postgresql-contrib-{{ postgres_version }}"
+    state: present
+
+- name: Настройка wal_level
+  lineinfile:
+    path: "/etc/postgresql/{{ postgres_version }}/main/postgresql.conf"
+    regexp: '^#?wal_level'
+    line: "wal_level = 'replica'"
+  notify: Restart PostgreSQL
+
+- name: Настройка listen_addresses
+  lineinfile:
+    path: "/etc/postgresql/{{ postgres_version }}/main/postgresql.conf"
+    regexp: '^#?listen_addresses'
+    line: "listen_addresses = '*'"
+  notify: Restart PostgreSQL
+
+- name: Создание пользователя репликации (replicator)
+  become: true
+  shell: |
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='{{ replication_user }}'" | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE ROLE {{ replication_user }} WITH REPLICATION LOGIN ENCRYPTED PASSWORD '{{ replication_password }}';"
+  args:
+    executable: /bin/bash
+
+- name: Разрешить доступ к репликации в pg_hba.conf
+  lineinfile:
+    path: "/etc/postgresql/{{ postgres_version }}/main/pg_hba.conf"
+    line: "host replication {{ replication_user }} 0.0.0.0/0 scram-sha-256"
+    insertafter: EOF
+  notify: Restart PostgreSQL
+
+- name: Создание пользователя и базы (wikiuser/my_wiki)
+  become: true
+  block:
+    - name: Создание пользователя wikiuser
+      shell: |
+        sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='{{ sysadmin_user }}'" | grep -q 1 || \
+        sudo -u postgres psql -c "CREATE ROLE {{ sysadmin_user }} WITH LOGIN ENCRYPTED PASSWORD '{{ sysadmin_password }}' CREATEDB;"
+      args:
+        executable: /bin/bash
+
+    - name: Создание базы данных my_wiki
+      shell: |
+        sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw {{ sysadmin_db }} || \
+        sudo -u postgres createdb -O {{ sysadmin_user }} {{ sysadmin_db }}
+      args:
+        executable: /bin/bash
+
+- name: Разрешить доступ wikiuser к базе
+  lineinfile:
+    path: "/etc/postgresql/{{ postgres_version }}/main/pg_hba.conf"
+    line: "host {{ sysadmin_db }} {{ sysadmin_user }} 0.0.0.0/0 scram-sha-256"
+    insertafter: EOF
+  notify: Restart PostgreSQL

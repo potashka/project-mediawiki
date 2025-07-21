@@ -1,7 +1,8 @@
----
-- name: Install MediaWiki dependencies
+# Установить зависимости (apache2 + php)
+- name: Install MediaWiki dependencies (apache2)
   apt:
     name:
+      - apache2
       - php
       - php-intl
       - php-mbstring
@@ -12,17 +13,35 @@
       - tar
     update_cache: yes
 
+# Убедиться, что apache2 запущен
+- name: Ensure apache2 is running
+  service:
+    name: apache2
+    state: started
+    enabled: true
+
+# Скачать MediaWiki
 - name: Download MediaWiki
   get_url:
     url: https://releases.wikimedia.org/mediawiki/1.42/mediawiki-1.42.1.tar.gz
     dest: /tmp/mediawiki.tar.gz
 
+# Распаковать MediaWiki в /var/www/html
 - name: Extract MediaWiki
   unarchive:
     src: /tmp/mediawiki.tar.gz
     dest: /var/www/html/
     remote_src: yes
 
+# Сделать /var/www/html/mediawiki-1.42.1 главным каталогом
+- name: Symlink mediawiki to /var/www/html/mediawiki
+  file:
+    src: /var/www/html/mediawiki-1.42.1
+    dest: /var/www/html/mediawiki
+    state: link
+    force: yes
+
+# Дать права www-data на папку mediawiki
 - name: Set permissions
   file:
     path: /var/www/html/mediawiki-1.42.1
@@ -30,6 +49,7 @@
     group: www-data
     recurse: yes
 
+# Создать images, если не существует
 - name: Ensure images directory exists
   file:
     path: /var/www/html/mediawiki-1.42.1/images
@@ -37,3 +57,10 @@
     owner: www-data
     group: www-data
     mode: '0755'
+
+# (опционально) Отключить дефолтную страницу apache
+- name: Remove Apache default index.html
+  file:
+    path: /var/www/html/index.html
+    state: absent
+  ignore_errors: true

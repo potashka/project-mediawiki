@@ -9,13 +9,13 @@
   hosts: postgres_master
   become: true
   roles:
-    - postgres
+    - postgres_master
 
 - name: Setup PostgreSQL replica
   hosts: postgres_replica
   become: true
   roles:
-    - postgres
+    - postgres_replica
 
 - name: Setup NGINX load balancer
   hosts: nginx
