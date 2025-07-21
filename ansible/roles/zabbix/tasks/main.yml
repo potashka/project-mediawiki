@@ -1,30 +1,25 @@
----
-# Установка PostgreSQL (локально для Zabbix)
 - name: Install PostgreSQL
   apt:
     name: postgresql
     state: present
     update_cache: yes
 
-# Создание пользователя zabbix в PostgreSQL
 - name: Create PostgreSQL user for Zabbix
-  become_user: postgres
-  postgresql_user:
-    name: zabbix
-    password: zabbix
+  become: true
+  shell: |
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='zabbix'" | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE USER zabbix WITH PASSWORD 'zabbix';"
+  args:
+    executable: /bin/bash
 
-# Создание базы данных zabbix
 - name: Create Zabbix database
-  become_user: postgres
-  postgresql_db:
-    name: zabbix
-    owner: zabbix
-    encoding: UTF8
-    lc_collate: en_US.UTF-8
-    lc_ctype: en_US.UTF-8
-    template: template0
+  become: true
+  shell: |
+    sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw zabbix || \
+    sudo -u postgres createdb -O zabbix -E UTF8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8 -T template0 zabbix
+  args:
+    executable: /bin/bash
 
-# Установка репозитория Zabbix
 - name: Install Zabbix repo
   apt:
     deb: https://repo.zabbix.com/zabbix/6.5/ubuntu/pool/main/z/zabbix-release/zabbix-release_6.5-1+ubuntu22.04_all.deb
@@ -34,7 +29,6 @@
   apt:
     update_cache: yes
 
-# Установка компонентов Zabbix
 - name: Install Zabbix server and frontend
   apt:
     name:
@@ -45,16 +39,14 @@
       - zabbix-agent
     state: present
 
-# Импорт схемы базы данных (schema + images + data)
 - name: Load initial Zabbix schema into DB
-  become_user: postgres
+  become: true
   shell: |
-    zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | psql zabbix
+    sudo -u postgres bash -c 'zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | psql zabbix'
   args:
     executable: /bin/bash
   when: "'zabbix' in group_names"
 
-# Перезапуск сервисов
 - name: Ensure services are running
   service:
     name: "{{ item }}"
