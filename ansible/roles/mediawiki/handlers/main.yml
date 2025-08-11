@@ -1,0 +1,6 @@
+# roles/mediawiki/handlers/main.yml
+---
+- name: Reload Apache
+  service:
+    name: apache2
+    state: reloaded

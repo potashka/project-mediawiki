@@ -1,0 +1,9 @@
+---
+- name: Reload Nginx
+  command: nginx -t
+  notify: Do reload Nginx
+
+- name: Do reload Nginx
+  service:
+    name: nginx
+    state: reloaded

@@ -1,4 +1,4 @@
-# Установить nginx
+# roles/nginx/tasks/main.yml
 - name: Install nginx
   apt:
     name: nginx
@@ -13,23 +13,29 @@
     owner: root
     group: root
     mode: '0644'
+  notify: Reload Nginx
 
 # Добавить записи в /etc/hosts для обоих wiki
 - name: Add mediawiki-1 to /etc/hosts
   lineinfile:
     path: /etc/hosts
+    regexp: '^\d+\.\d+\.\d+\.\d+\s+mediawiki-1$'
     line: "{{ hostvars['mediawiki-1'].ansible_host }} mediawiki-1"
     state: present
 
 - name: Add mediawiki-2 to /etc/hosts
   lineinfile:
     path: /etc/hosts
+    regexp: '^\d+\.\d+\.\d+\.\d+\s+mediawiki-2$'
     line: "{{ hostvars['mediawiki-2'].ansible_host }} mediawiki-2"
     state: present
 
 # Перезапустить nginx
-- name: Restart nginx
+- meta: flush_handlers
+
+# Гарантируем, что сервис поднят (без жёсткого рестарта)
+- name: Ensure nginx is running
   service:
     name: nginx
-    state: restarted
+    state: started
     enabled: true

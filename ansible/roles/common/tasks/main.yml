@@ -1,3 +1,4 @@
+#roles/common/tasks/main.yml
 ---
 - name: Install Zabbix agent
   apt:
@@ -5,14 +6,23 @@
     state: present
     update_cache: yes
 
-- name: Configure Zabbix agent to connect to Zabbix server
+- name: Set Zabbix agent passive Server
   lineinfile:
     path: /etc/zabbix/zabbix_agentd.conf
     regexp: '^Server='
-    line: 'Server=backup-zabbix'
+    line: "Server={{ zabbix_agent_server | default('backup-zabbix') }}"
+  notify: Restart Zabbix agent
 
-- name: Restart agent
-  service:
-    name: zabbix-agent
-    state: restarted
-    enabled: true
+- name: Set Zabbix agent active ServerActive
+  lineinfile:
+    path: /etc/zabbix/zabbix_agentd.conf
+    regexp: '^ServerActive='
+    line: "ServerActive={{ zabbix_agent_server | default('backup-zabbix') }}"
+  notify: Restart Zabbix agent
+
+- name: Set Zabbix agent Hostname to inventory_hostname
+  lineinfile:
+    path: /etc/zabbix/zabbix_agentd.conf
+    regexp: '^Hostname='
+    line: "Hostname={{ inventory_hostname }}"
+  notify: Restart Zabbix agent

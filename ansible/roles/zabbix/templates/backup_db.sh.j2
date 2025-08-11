@@ -1,0 +1,22 @@
+#!/bin/bash
+set -euo pipefail
+
+DB_NAME="{{ sysadmin_db }}"
+DB_USER="{{ sysadmin_user }}"
+DB_HOST="{{ hostvars['pg-master'].ansible_host }}"
+DEST_DIR="/opt/backups/db"
+DATE="$(date +%F)"
+BACKUP_PATH="$DEST_DIR/${DB_NAME}_${DATE}.sql.gz"
+
+mkdir -p "$DEST_DIR"
+
+export PGPASSWORD="{{ sysadmin_password }}"
+if pg_dump -h "$DB_HOST" -U "$DB_USER" "$DB_NAME" | gzip > "$BACKUP_PATH"; then
+  echo "[INFO] $(date -Is) Backup БД создан: $BACKUP_PATH"
+else
+  echo "[ERROR] $(date -Is) Не удалось создать дамп БД" >&2
+  exit 1
+fi
+
+# Retention: 14 дней
+find "$DEST_DIR" -type f -name '*.sql.gz' -mtime +14 -print -delete

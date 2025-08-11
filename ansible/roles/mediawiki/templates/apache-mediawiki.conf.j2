@@ -1,0 +1,13 @@
+<VirtualHost *:80>
+    ServerName {{ mediawiki_server_name | default(inventory_hostname) }}
+    DocumentRoot {{ mediawiki_dir }}
+
+    <Directory {{ mediawiki_dir }}>
+        Options FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog ${APACHE_LOG_DIR}/mediawiki_error.log
+    CustomLog ${APACHE_LOG_DIR}/mediawiki_access.log combined
+</VirtualHost>

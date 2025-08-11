@@ -1,3 +1,4 @@
+# site.yml
 ---
 - name: Install MediaWiki nodes
   hosts: mediawiki

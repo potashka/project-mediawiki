@@ -1,66 +1,123 @@
-# Установить зависимости (apache2 + php)
-- name: Install MediaWiki dependencies (apache2)
+# roles/mediawiki/tasks/main.yml
+---
+# Самодостаточная установка MediaWiki на app-нодах (Apache2 + PHP + PostgreSQL)
+
+- name: Set MediaWiki facts (inline)
+  set_fact:
+    mediawiki_version: "1.42.1"
+    mediawiki_tarball: "https://releases.wikimedia.org/mediawiki/1.42/mediawiki-{{ mediawiki_version }}.tar.gz"
+    mediawiki_dir: "/var/www/mediawiki-{{ mediawiki_version }}"
+    mediawiki_site_name: "Corporate Wiki"
+    mediawiki_lang: "ru"
+    mediawiki_admin_user: "{{ mediawiki_admin_user | default('admin') }}"
+    mediawiki_admin_pass: "{{ mediawiki_admin_pass | default('ChangeMe!') }}"
+    mediawiki_server_url: "http://{{ hostvars['nginx-lb'].ansible_host }}/"
+
+- name: Install Apache, PHP and required modules
   apt:
     name:
       - apache2
+      - libapache2-mod-php
+      - wget
+      - tar
       - php
       - php-intl
       - php-mbstring
       - php-xml
       - php-apcu
       - php-curl
-      - wget
-      - tar
+      - php-zip
+      - php-gd
+      - php-ldap
+      - php-pgsql   # критично для PostgreSQL
+    state: present
     update_cache: yes
 
-# Убедиться, что apache2 запущен
-- name: Ensure apache2 is running
-  service:
-    name: apache2
-    state: started
-    enabled: true
+- name: Enable Apache rewrite module
+  command: a2enmod rewrite
+  args:
+    creates: /etc/apache2/mods-enabled/rewrite.load
+  notify: Reload Apache
 
-# Скачать MediaWiki
-- name: Download MediaWiki
+- name: Download MediaWiki {{ mediawiki_version }}
   get_url:
-    url: https://releases.wikimedia.org/mediawiki/1.42/mediawiki-1.42.1.tar.gz
+    url: "{{ mediawiki_tarball }}"
     dest: /tmp/mediawiki.tar.gz
+    mode: '0644'
 
-# Распаковать MediaWiki в /var/www/html
-- name: Extract MediaWiki
-  unarchive:
-    src: /tmp/mediawiki.tar.gz
-    dest: /var/www/html/
-    remote_src: yes
-
-# Сделать /var/www/html/mediawiki-1.42.1 главным каталогом
-- name: Symlink mediawiki to /var/www/html/mediawiki
+- name: Create target dir
   file:
-    src: /var/www/html/mediawiki-1.42.1
-    dest: /var/www/html/mediawiki
-    state: link
-    force: yes
-
-# Дать права www-data на папку mediawiki
-- name: Set permissions
-  file:
-    path: /var/www/html/mediawiki-1.42.1
-    owner: www-data
-    group: www-data
-    recurse: yes
-
-# Создать images, если не существует
-- name: Ensure images directory exists
-  file:
-    path: /var/www/html/mediawiki-1.42.1/images
+    path: "{{ mediawiki_dir }}"
     state: directory
     owner: www-data
     group: www-data
     mode: '0755'
 
-# (опционально) Отключить дефолтную страницу apache
-- name: Remove Apache default index.html
+- name: Extract MediaWiki
+  unarchive:
+    src: /tmp/mediawiki.tar.gz
+    dest: /var/www/
+    remote_src: true
+    creates: "{{ mediawiki_dir }}/index.php"
+
+- name: Ensure ownership on mediawiki dir
   file:
-    path: /var/www/html/index.html
+    path: "{{ mediawiki_dir }}"
+    owner: www-data
+    group: www-data
+    recurse: true
+
+- name: Deploy Apache vhost for MediaWiki (template)
+  template:
+    src: apache-mediawiki.conf.j2
+    dest: /etc/apache2/sites-available/mediawiki.conf
+    mode: '0644'
+  notify: Reload Apache
+
+- name: Enable site mediawiki
+  file:
+    src: /etc/apache2/sites-available/mediawiki.conf
+    dest: /etc/apache2/sites-enabled/mediawiki.conf
+    state: link
+  notify: Reload Apache
+
+- name: Disable default Apache site
+  file:
+    path: /etc/apache2/sites-enabled/000-default.conf
     state: absent
-  ignore_errors: true
+  notify: Reload Apache
+
+- name: Ensure Apache is running
+  service:
+    name: apache2
+    state: started
+    enabled: true
+
+# При необходимости применить все отложенные reload до установки (не обязательно, но аккуратно)
+- meta: flush_handlers
+
+# Non-interactive установка MediaWiki: создаёт LocalSettings.php (идемпотентно через creates)
+- name: Install MediaWiki (non-interactive) -> generate LocalSettings.php
+  command: >
+    php {{ mediawiki_dir }}/maintenance/install.php
+    --dbtype=postgres
+    --dbserver={{ master_host }}
+    --dbuser={{ sysadmin_user }}
+    --dbpass={{ sysadmin_password }}
+    --dbname={{ sysadmin_db }}
+    --installdbuser={{ sysadmin_user }}
+    --installdbpass={{ sysadmin_password }}
+    --lang={{ mediawiki_lang }}
+    --scriptpath=""
+    --server="{{ mediawiki_server_url }}"
+    --pass={{ mediawiki_admin_pass }}
+    "{{ mediawiki_site_name }}" "{{ mediawiki_admin_user }}"
+  args:
+    creates: "{{ mediawiki_dir }}/LocalSettings.php"
+
+- name: Secure LocalSettings.php
+  file:
+    path: "{{ mediawiki_dir }}/LocalSettings.php"
+    owner: www-data
+    group: www-data
+    mode: '0600'

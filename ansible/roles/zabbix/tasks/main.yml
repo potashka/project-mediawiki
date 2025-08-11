@@ -1,3 +1,7 @@
+# roles/zabbix/tasks/main.yml
+---
+# Установка PostgreSQL для Zabbix, самого Zabbix, и настройка бэкапов (DB + FS)
+
 - name: Install PostgreSQL
   apt:
     name: postgresql
@@ -20,6 +24,7 @@
   args:
     executable: /bin/bash
 
+# Репозиторий 6.0 для выбранной версии Ubuntu
 - name: Install Zabbix 6.0 repo
   apt:
     deb: https://repo.zabbix.com/zabbix/6.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_6.0-4+ubuntu20.04_all.deb
@@ -58,6 +63,53 @@
     - apache2
     - zabbix-agent
 
+# --- SSH key for rsync from backup host to app nodes ---
+- name: Ensure /root/.ssh exists on backup host
+  file:
+    path: /root/.ssh
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install private key for rsync (from control machine)
+  copy:
+    content: "{{ lookup('file', ansible_ssh_private_key_file) }}"
+    dest: /root/.ssh/id_rsa
+    owner: root
+    group: root
+    mode: '0600'
+
+# конфиг ssh (используем IdentityFile и отключаем проверку ключа хоста)
+- name: Configure SSH client for backups
+  copy:
+    dest: /root/.ssh/config
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      Host mediawiki-1 {{ hostvars['mediawiki-1'].ansible_host }}
+        User {{ ansible_user }}
+        IdentityFile /root/.ssh/id_rsa
+        StrictHostKeyChecking no
+        UserKnownHostsFile /dev/null
+        LogLevel ERROR
+
+      Host mediawiki-2 {{ hostvars['mediawiki-2'].ansible_host }}
+        User {{ ansible_user }}
+        IdentityFile /root/.ssh/id_rsa
+        StrictHostKeyChecking no
+        UserKnownHostsFile /dev/null
+        LogLevel ERROR
+
+# ==== БЭКАПЫ ====
+
+- name: Ensure rsync is installed (for FS backups)
+  apt:
+    name: rsync
+    state: present
+    update_cache: yes
+
 - name: Create backup target directories
   file:
     path: "{{ item }}"
@@ -69,16 +121,17 @@
     - /opt/backups/files
     - /opt/backups/db
 
-- name: Upload backup scripts
-  copy:
-    src: "{{ item }}"
-    dest: "/usr/local/bin/{{ item }}"
+# Кладём скрипты как шаблоны (переменные подставит Ansible)
+- name: Upload backup scripts (templated)
+  template:
+    src: "{{ item.src }}"
+    dest: "/usr/local/bin/{{ item.dest }}"
     mode: '0755'
   loop:
-    - backup_fs.sh
-    - backup_db.sh
+    - { src: "backup_fs.sh.j2", dest: "backup_fs.sh" }
+    - { src: "backup_db.sh.j2", dest: "backup_db.sh" }
 
-- name: Create cron jobs for backup scripts
+- name: Create cron jobs for backup scripts (daily 03:00)
   cron:
     name: "Daily {{ item.name }}"
     minute: "0"
@@ -86,4 +139,303 @@
     job: "/usr/local/bin/{{ item.script }}"
   loop:
     - { name: "filesystem backup", script: "backup_fs.sh" }
-    - { name: "database backup", script: "backup_db.sh" }
+    - { name: "database backup",  script: "backup_db.sh" }
+
+# === Zabbix Web Scenario: MediaWiki Front (создание/обновление) ===
+
+- name: Zabbix API | Login and get auth token
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "user.login"
+      params:
+        user: "{{ zabbix_api_user }}"
+        password: "{{ zabbix_api_password }}"
+      id: 1
+    status_code: 200
+  register: zbx_login
+  changed_when: false
+
+- name: Zabbix API | Get hostid for {{ zabbix_http_check_host }}
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "host.get"
+      params:
+        output: ["hostid","host"]
+        filter:
+          host: ["{{ zabbix_http_check_host }}"]
+      auth: "{{ zbx_login.json.result }}"
+      id: 2
+    status_code: 200
+  register: zbx_host
+  changed_when: false
+
+- name: Fail if host not found in Zabbix
+  fail:
+    msg: "Хост {{ zabbix_http_check_host }} не найден в Zabbix. Создай его в UI или через роль, затем повтори."
+  when: zbx_host.json.result | length == 0
+
+- name: Set fact hostid
+  set_fact:
+    zbx_hostid: "{{ (zbx_host.json.result | first).hostid }}"
+
+- name: Zabbix API | Check if webscenario exists
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "httptest.get"
+      params:
+        output: ["httptestid","name"]
+        hostids: ["{{ zbx_hostid }}"]
+        filter:
+          name: ["{{ zabbix_http_check_name }}"]
+      auth: "{{ zbx_login.json.result }}"
+      id: 3
+    status_code: 200
+  register: zbx_ws
+  changed_when: false
+
+- name: Zabbix API | Create webscenario (if missing)
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "httptest.create"
+      params:
+        name: "{{ zabbix_http_check_name }}"
+        hostid: "{{ zbx_hostid }}"
+        delay: "{{ zabbix_http_check_delay }}"
+        retries: 1
+        steps:
+          - name: "GET /"
+            url: "{{ zabbix_http_check_url }}"
+            timeout: "{{ zabbix_http_check_timeout }}"
+            status_codes: "200"
+            follow_redirects: 1
+      auth: "{{ zbx_login.json.result }}"
+      id: 4
+    status_code: 200
+  register: zbx_ws_create
+  when: zbx_ws.json.result | length == 0
+
+- name: Zabbix API | Update webscenario (if exists)
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "httptest.update"
+      params:
+        httptestid: "{{ (zbx_ws.json.result | first).httptestid }}"
+        name: "{{ zabbix_http_check_name }}"
+        delay: "{{ zabbix_http_check_delay }}"
+        steps:
+          - name: "GET /"
+            url: "{{ zabbix_http_check_url }}"
+            timeout: "{{ zabbix_http_check_timeout }}"
+            status_codes: "200"
+            follow_redirects: 1
+      auth: "{{ zbx_login.json.result }}"
+      id: 5
+    status_code: 200
+  when: zbx_ws.json.result | length > 0
+
+# === TRIGGERS for Web Scenario ===
+
+- name: Zabbix API | Login (for triggers)
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "user.login"
+      params:
+        user: "{{ zabbix_api_user }}"
+        password: "{{ zabbix_api_password }}"
+      id: 101
+    status_code: 200
+  register: zbx_auth_tr
+  changed_when: false
+
+- name: Zabbix API | Get hostid for triggers
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "host.get"
+      params:
+        output: ["hostid","host"]
+        filter:
+          host: ["{{ zabbix_http_check_host }}"]
+      auth: "{{ zbx_auth_tr.json.result }}"
+      id: 102
+    status_code: 200
+  register: zbx_host_tr
+  changed_when: false
+
+- name: Fail if host for triggers not found
+  fail:
+    msg: "Хост {{ zabbix_http_check_host }} не найден в Zabbix (для триггеров)."
+  when: zbx_host_tr.json.result | length == 0
+
+- name: Set facts for trigger expressions
+  set_fact:
+    zbx_hostid_tr: "{{ (zbx_host_tr.json.result | first).hostid }}"
+    zbx_expr_code: "{{ '{' ~ zabbix_http_check_host ~ ':web.test.rspcode[' ~ zabbix_http_check_name ~ '].last()}' }}<>200"
+    zbx_expr_time_warn: "{{ '{' ~ zabbix_http_check_host ~ ':web.test.time[' ~ zabbix_http_check_name ~ ',GET /,resp].avg(5m)}' }}>{{ (zabbix_http_rt_warn_ms | default(2000) | int) / 1000.0 }}"
+    zbx_expr_time_crit: "{{ '{' ~ zabbix_http_check_host ~ ':web.test.time[' ~ zabbix_http_check_name ~ ',GET /,resp].avg(5m)}' }}>{{ (zabbix_http_rt_crit_ms | default(5000) | int) / 1000.0 }}"
+
+- name: Zabbix API | Get existing triggers
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "trigger.get"
+      params:
+        output: ["triggerid","description","expression","priority"]
+        hostids: ["{{ zbx_hostid_tr }}"]
+      auth: "{{ zbx_auth_tr.json.result }}"
+      id: 103
+    status_code: 200
+  register: zbx_triggers
+  changed_when: false
+
+# ---- Trigger 1: HTTP code != 200 ----
+- name: Ensure trigger HTTP code != 200 exists
+  vars:
+    tr_descr: "MediaWiki Front: HTTP code is not 200"
+    tr_expr: "{{ zbx_expr_code }}"
+  block:
+    - set_fact:
+        tr_existing: "{{ (zbx_triggers.json.result | selectattr('description','equalto', tr_descr) | list) }}"
+    - name: Create trigger (code!=200) if missing
+      uri:
+        url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "trigger.create"
+          params:
+            description: "{{ tr_descr }}"
+            expression: "{{ tr_expr }}"
+            priority: 4    # High
+          auth: "{{ zbx_auth_tr.json.result }}"
+          id: 104
+        status_code: 200
+      when: tr_existing | length == 0
+    - name: Update trigger (code!=200) if exists
+      uri:
+        url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "trigger.update"
+          params:
+            triggerid: "{{ (tr_existing | first).triggerid }}"
+            expression: "{{ tr_expr }}"
+            priority: 4
+          auth: "{{ zbx_auth_tr.json.result }}"
+          id: 105
+        status_code: 200
+      when: tr_existing | length > 0
+
+# ---- Trigger 2: Response time thresholds (warn/crit) ----
+- name: Ensure trigger Response time WARN exists
+  vars:
+    tr_descr: "MediaWiki Front: response time > {{ zabbix_http_rt_warn_ms | default(2000) }} ms (avg 5m)"
+    tr_expr: "{{ zbx_expr_time_warn }}"
+  block:
+    - set_fact:
+        tr_existing: "{{ (zbx_triggers.json.result | selectattr('description','equalto', tr_descr) | list) }}"
+    - name: Create trigger (RT warn) if missing
+      uri:
+        url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "trigger.create"
+          params:
+            description: "{{ tr_descr }}"
+            expression: "{{ tr_expr }}"
+            priority: 3    # Average
+          auth: "{{ zbx_auth_tr.json.result }}"
+          id: 106
+        status_code: 200
+      when: tr_existing | length == 0
+    - name: Update trigger (RT warn) if exists
+      uri:
+        url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "trigger.update"
+          params:
+            triggerid: "{{ (tr_existing | first).triggerid }}"
+            expression: "{{ tr_expr }}"
+            priority: 3
+          auth: "{{ zbx_auth_tr.json.result }}"
+          id: 107
+        status_code: 200
+      when: tr_existing | length > 0
+
+- name: Ensure trigger Response time CRIT exists
+  vars:
+    tr_descr: "MediaWiki Front: response time > {{ zabbix_http_rt_crit_ms | default(5000) }} ms (avg 5m)"
+    tr_expr: "{{ zbx_expr_time_crit }}"
+  block:
+    - set_fact:
+        tr_existing: "{{ (zbx_triggers.json.result | selectattr('description','equalto', tr_descr) | list) }}"
+    - name: Create trigger (RT crit) if missing
+      uri:
+        url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "trigger.create"
+          params:
+            description: "{{ tr_descr }}"
+            expression: "{{ tr_expr }}"
+            priority: 4    # High
+          auth: "{{ zbx_auth_tr.json.result }}"
+          id: 108
+        status_code: 200
+      when: tr_existing | length == 0
+    - name: Update trigger (RT crit) if exists
+      uri:
+        url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+        method: POST
+        body_format: json
+        body:
+          jsonrpc: "2.0"
+          method: "trigger.update"
+          params:
+            triggerid: "{{ (tr_existing | first).triggerid }}"
+            expression: "{{ tr_expr }}"
+            priority: 4
+          auth: "{{ zbx_auth_tr.json.result }}"
+          id: 109
+        status_code: 200
+      when: tr_existing | length > 0

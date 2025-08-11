@@ -1,3 +1,4 @@
+# inventory.yaml
 all:
   children:
     nginx:

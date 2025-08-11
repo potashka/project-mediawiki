@@ -1,3 +1,4 @@
+#roles/postrges_replica/tasks/main.yml
 - name: Установить gnupg
   apt:
     name: gnupg
