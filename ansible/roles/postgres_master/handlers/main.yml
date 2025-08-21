@@ -5,3 +5,8 @@
     name: postgresql
     state: restarted
     enabled: true
+
+- name: Reload PostgreSQL
+  service:
+    name: postgresql
+    state: reloaded

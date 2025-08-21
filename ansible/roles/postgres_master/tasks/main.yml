@@ -1,81 +1,176 @@
 # ansible/roles/postgres_master/tasks/main.yml
-- name: Установить gnupg
+---
+# ===== PostgreSQL Master (Ubuntu 20.04 focal) =====
+# Архивный PGDG + пиннинг только focal-pgdg, затем PG12 с md5-авторизацией
+
+# --- PGDG archive repo ---
+
+- name: Choose PGDG host/suite for focal
+  set_fact:
+    pgdg_host: "apt-archive.postgresql.org"
+    pgdg_suite: "focal-pgdg"
+
+- name: Remove legacy PGDG sources
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/pgdg.list
+    - /etc/apt/sources.list.d/pgdg.sources
+
+- name: Purge PGDG lines from /etc/apt/sources.list
+  replace:
+    path: /etc/apt/sources.list
+    regexp: '^.*apt(-archive)?\.postgresql\.org.*\n'
+    replace: ''
+  ignore_errors: true
+
+- name: Clean apt lists (pre)
+  file:
+    path: /var/lib/apt/lists
+    state: absent
+
+- name: Ensure apt lists dir exists
+  file:
+    path: /var/lib/apt/lists
+    state: directory
+    mode: '0755'
+
+- name: Install apt prerequisites (no update yet)
   apt:
-    name: gnupg
+    name:
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - curl
     state: present
+    update_cache: no
+
+- name: Install PostgreSQL signing key (keyring)
+  shell: |
+    set -e
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor > /usr/share/keyrings/postgresql.gpg
+  args:
+    creates: /usr/share/keyrings/postgresql.gpg
+
+- name: Pin ONLY focal-pgdg (avoid all)
+  copy:
+    dest: /etc/apt/preferences.d/pgdg.pref
+    mode: '0644'
+    content: |
+      Package: *
+      Pin: release n={{ pgdg_suite }}
+      Pin-Priority: 700
+
+- name: Add PGDG archive repository (.sources + https)
+  copy:
+    dest: /etc/apt/sources.list.d/pgdg.sources
+    mode: '0644'
+    content: |
+      Types: deb
+      URIs: https://{{ pgdg_host }}/pub/repos/apt
+      Suites: {{ pgdg_suite }}
+      Components: main
+      Signed-By: /usr/share/keyrings/postgresql.gpg
+
+- name: apt update (after PGDG)
+  apt:
     update_cache: yes
 
-- name: Импортировать GPG-ключ репозитория PostgreSQL
-  apt_key:
-    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
-    state: present
+# --- Install PostgreSQL 12 (server + contrib + client) ---
 
-- name: Добавить официальный репозиторий PostgreSQL
-  apt_repository:
-    repo: "deb http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
-    state: present
-    filename: "pgdg"
-
-- name: Обновить кеш пакетов
-  apt:
-    update_cache: yes
-
-- name: Установка PostgreSQL
+- name: Install PostgreSQL server & client
   apt:
     name:
       - "postgresql-{{ postgres_version }}"
       - "postgresql-contrib-{{ postgres_version }}"
+      - "postgresql-client-{{ postgres_version }}"
     state: present
 
-- name: Настройка wal_level
+# --- Master config (PG12 + md5 auth) ---
+
+# Для PG12 делаем пароли в формате md5, чтобы совпадало с методами в pg_hba
+- name: Ensure password_encryption=md5
+  lineinfile:
+    path: "/etc/postgresql/{{ postgres_version }}/main/postgresql.conf"
+    regexp: '^#?password_encryption\s*='
+    line: "password_encryption = md5"
+  notify: Restart PostgreSQL
+
+- name: Configure wal_level = replica
   lineinfile:
     path: "/etc/postgresql/{{ postgres_version }}/main/postgresql.conf"
     regexp: '^#?wal_level'
     line: "wal_level = 'replica'"
   notify: Restart PostgreSQL
 
-- name: Настройка listen_addresses
+- name: Configure listen_addresses = '*'
   lineinfile:
     path: "/etc/postgresql/{{ postgres_version }}/main/postgresql.conf"
     regexp: '^#?listen_addresses'
     line: "listen_addresses = '*'"
   notify: Restart PostgreSQL
 
-- name: Создание пользователя репликации (replicator)
+# --- Roles ---
+
+- name: Ensure replication role exists
   become: true
   shell: |
     sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='{{ replication_user }}'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE ROLE {{ replication_user }} WITH REPLICATION LOGIN ENCRYPTED PASSWORD '{{ replication_password }}';"
-  args:
-    executable: /bin/bash
+    sudo -u postgres psql -c "CREATE ROLE {{ replication_user }} WITH REPLICATION LOGIN PASSWORD '{{ replication_password }}';"
+  args: { executable: /bin/bash }
 
-- name: Разрешить доступ к репликации в pg_hba.conf
-  lineinfile:
-    path: "/etc/postgresql/{{ postgres_version }}/main/pg_hba.conf"
-    line: "host replication {{ replication_user }} 0.0.0.0/0 scram-sha-256"
-    insertafter: EOF
-  notify: Restart PostgreSQL
-
-- name: Создание пользователя и базы (wikiuser/my_wiki)
+- name: Ensure app role exists
   become: true
-  block:
-    - name: Создание пользователя wikiuser
-      shell: |
-        sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='{{ sysadmin_user }}'" | grep -q 1 || \
-        sudo -u postgres psql -c "CREATE ROLE {{ sysadmin_user }} WITH LOGIN ENCRYPTED PASSWORD '{{ sysadmin_password }}' CREATEDB;"
-      args:
-        executable: /bin/bash
+  shell: |
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='{{ sysadmin_user }}'" | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE ROLE {{ sysadmin_user }} WITH LOGIN PASSWORD '{{ sysadmin_password }}' CREATEDB;"
+  args: { executable: /bin/bash }
 
-    - name: Создание базы данных my_wiki
-      shell: |
-        sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw {{ sysadmin_db }} || \
-        sudo -u postgres createdb -O {{ sysadmin_user }} {{ sysadmin_db }}
-      args:
-        executable: /bin/bash
+# На всякий случай жёстко перезаписываем пароли (если роль была создана раньше под scram)
+- name: Force reset password for replicator (md5)
+  shell: |
+    sudo -u postgres psql -c "ALTER ROLE {{ replication_user }} WITH PASSWORD '{{ replication_password }}';"
+  args: { executable: /bin/bash }
 
-- name: Разрешить доступ wikiuser к базе
+- name: Force reset password for app user (md5)
+  shell: |
+    sudo -u postgres psql -c "ALTER ROLE {{ sysadmin_user }} WITH PASSWORD '{{ sysadmin_password }}';"
+  args: { executable: /bin/bash }
+
+# --- pg_hba.conf (md5, не scram). Для репликации ограничим по IP реплики ---
+
+- name: Allow replication from replica host (md5)
   lineinfile:
     path: "/etc/postgresql/{{ postgres_version }}/main/pg_hba.conf"
-    line: "host {{ sysadmin_db }} {{ sysadmin_user }} 0.0.0.0/0 scram-sha-256"
+    regexp: '^host\s+replication\s+{{ replication_user }}\s+.*'
+    line: "host replication {{ replication_user }} {{ hostvars['pg-replica'].ansible_host }}/32 md5"
     insertafter: EOF
-  notify: Restart PostgreSQL
+  notify: Reload PostgreSQL
+
+- name: Allow app user to DB (md5)
+  lineinfile:
+    path: "/etc/postgresql/{{ postgres_version }}/main/pg_hba.conf"
+    regexp: '^host\s+{{ sysadmin_db }}\s+{{ sysadmin_user }}\s+.*'
+    line: "host {{ sysadmin_db }} {{ sysadmin_user }} 0.0.0.0/0 md5"
+    insertafter: EOF
+  notify: Reload PostgreSQL
+
+# --- App DB ---
+
+- name: Ensure app database exists
+  become: true
+  shell: |
+    sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw {{ sysadmin_db }} || \
+    sudo -u postgres createdb -O {{ sysadmin_user }} {{ sysadmin_db }}
+  args: { executable: /bin/bash }
+
+# (опционально) Проверка origin репозитория
+- name: Verify apt-cache policy for target package
+  shell: "apt-cache policy postgresql-{{ postgres_version }}"
+  register: pg_policy
+  changed_when: false
+
+- debug:
+    var: pg_policy.stdout

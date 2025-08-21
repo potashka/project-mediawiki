@@ -1,11 +1,5 @@
 # site.yml
 ---
-- name: Install MediaWiki nodes
-  hosts: mediawiki
-  become: true
-  roles:
-    - mediawiki
-
 - name: Setup PostgreSQL master
   hosts: postgres_master
   become: true
@@ -17,6 +11,13 @@
   become: true
   roles:
     - postgres_replica
+
+- name: Install MediaWiki nodes
+  hosts: mediawiki
+  become: true
+  serial: 1
+  roles:
+    - mediawiki
 
 - name: Setup NGINX load balancer
   hosts: nginx

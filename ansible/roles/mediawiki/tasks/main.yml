@@ -1,17 +1,18 @@
 # roles/mediawiki/tasks/main.yml
 ---
 # Самодостаточная установка MediaWiki на app-нодах (Apache2 + PHP + PostgreSQL)
+# ВАЖНО: install.php запускается ОДИН РАЗ на первичной ноде, затем LocalSettings.php раздаётся всем.
 
 - name: Set MediaWiki facts (inline)
   set_fact:
-    mediawiki_version: "1.42.1"
-    mediawiki_tarball: "https://releases.wikimedia.org/mediawiki/1.42/mediawiki-{{ mediawiki_version }}.tar.gz"
+    mediawiki_tarball: "https://releases.wikimedia.org/mediawiki/{{ mediawiki_version.split('.')[:2] | join('.') }}/mediawiki-{{ mediawiki_version }}.tar.gz"
     mediawiki_dir: "/var/www/mediawiki-{{ mediawiki_version }}"
     mediawiki_site_name: "Corporate Wiki"
     mediawiki_lang: "ru"
     mediawiki_admin_user: "{{ mediawiki_admin_user | default('admin') }}"
-    mediawiki_admin_pass: "{{ mediawiki_admin_pass | default('ChangeMe!') }}"
+    mediawiki_admin_pass: "{{ mediawiki_admin_pass | default('ChangeMe!2025') }}"
     mediawiki_server_url: "http://{{ hostvars['nginx-lb'].ansible_host }}/"
+  tags: [mediawiki]
 
 - name: Install Apache, PHP and required modules
   apt:
@@ -29,21 +30,24 @@
       - php-zip
       - php-gd
       - php-ldap
-      - php-pgsql   # критично для PostgreSQL
+      - php-pgsql
     state: present
     update_cache: yes
+  tags: [mediawiki, packages]
 
 - name: Enable Apache rewrite module
   command: a2enmod rewrite
   args:
     creates: /etc/apache2/mods-enabled/rewrite.load
   notify: Reload Apache
+  tags: [mediawiki, apache]
 
 - name: Download MediaWiki {{ mediawiki_version }}
   get_url:
     url: "{{ mediawiki_tarball }}"
     dest: /tmp/mediawiki.tar.gz
     mode: '0644'
+  tags: [mediawiki, download]
 
 - name: Create target dir
   file:
@@ -52,6 +56,7 @@
     owner: www-data
     group: www-data
     mode: '0755'
+  tags: [mediawiki, fs]
 
 - name: Extract MediaWiki
   unarchive:
@@ -59,6 +64,7 @@
     dest: /var/www/
     remote_src: true
     creates: "{{ mediawiki_dir }}/index.php"
+  tags: [mediawiki, fs]
 
 - name: Ensure ownership on mediawiki dir
   file:
@@ -66,6 +72,7 @@
     owner: www-data
     group: www-data
     recurse: true
+  tags: [mediawiki, fs]
 
 - name: Deploy Apache vhost for MediaWiki (template)
   template:
@@ -73,6 +80,7 @@
     dest: /etc/apache2/sites-available/mediawiki.conf
     mode: '0644'
   notify: Reload Apache
+  tags: [mediawiki, apache]
 
 - name: Enable site mediawiki
   file:
@@ -80,24 +88,43 @@
     dest: /etc/apache2/sites-enabled/mediawiki.conf
     state: link
   notify: Reload Apache
+  tags: [mediawiki, apache]
 
 - name: Disable default Apache site
   file:
     path: /etc/apache2/sites-enabled/000-default.conf
     state: absent
   notify: Reload Apache
+  tags: [mediawiki, apache]
 
 - name: Ensure Apache is running
   service:
     name: apache2
     state: started
     enabled: true
+  tags: [mediawiki, apache]
 
-# При необходимости применить все отложенные reload до установки (не обязательно, но аккуратно)
+# Применяем накопившиеся reload'ы до инсталляции
 - meta: flush_handlers
 
-# Non-interactive установка MediaWiki: создаёт LocalSettings.php (идемпотентно через creates)
-- name: Install MediaWiki (non-interactive) -> generate LocalSettings.php
+# Определяем "первичную" mediawiki-ноду (первая в группе)
+- name: Set primary mediawiki host fact
+  set_fact:
+    mediawiki_primary_host: "{{ groups['mediawiki'][0] }}"
+  run_once: true
+  tags: [mediawiki]
+
+# (Опционально) ждём доступности PostgreSQL мастера, чтобы install.php не упал на race
+- name: Wait for PostgreSQL master to be reachable
+  wait_for:
+    host: "{{ master_host }}"
+    port: 5432
+    timeout: 60
+  run_once: true
+  tags: [mediawiki, db]
+
+# === ГЕНЕРАЦИЯ LocalSettings.php — ТОЛЬКО ОДИН РАЗ, НА ПЕРВИЧНОЙ НОДЕ ===
+- name: Install MediaWiki (non-interactive) -> generate LocalSettings.php (run once)
   command: >
     php {{ mediawiki_dir }}/maintenance/install.php
     --dbtype=postgres
@@ -114,10 +141,50 @@
     "{{ mediawiki_site_name }}" "{{ mediawiki_admin_user }}"
   args:
     creates: "{{ mediawiki_dir }}/LocalSettings.php"
+  run_once: true
+  delegate_to: "{{ mediawiki_primary_host }}"
+  tags: [mediawiki, install]
 
+# Подтверждаем, что файл создан на первичной ноде (полезно при повторных запусках)
+- name: Stat LocalSettings.php on primary
+  stat:
+    path: "{{ mediawiki_dir }}/LocalSettings.php"
+  register: localsettings_stat
+  run_once: true
+  delegate_to: "{{ mediawiki_primary_host }}"
+  tags: [mediawiki, install]
+
+- name: Fail if LocalSettings.php was not generated on primary
+  fail:
+    msg: "LocalSettings.php не найден на первичной ноде: {{ mediawiki_primary_host }}"
+  when: not localsettings_stat.stat.exists
+  run_once: true
+  tags: [mediawiki, install]
+
+# СЧИТАТЬ LocalSettings.php с первичной ноды
+- name: Read generated LocalSettings.php from primary node
+  slurp:
+    src: "{{ mediawiki_dir }}/LocalSettings.php"
+  register: localsettings_blob
+  run_once: true
+  delegate_to: "{{ mediawiki_primary_host }}"
+  tags: [mediawiki, install]
+
+# РАЗДАТЬ LocalSettings.php на все app-ноды
+- name: Distribute LocalSettings.php to all app nodes
+  copy:
+    dest: "{{ mediawiki_dir }}/LocalSettings.php"
+    content: "{{ localsettings_blob.content | b64decode }}"
+    owner: www-data
+    group: www-data
+    mode: '0600'
+  tags: [mediawiki, install]
+
+# (На всякий) обеспечить правильные права ещё раз
 - name: Secure LocalSettings.php
   file:
     path: "{{ mediawiki_dir }}/LocalSettings.php"
     owner: www-data
     group: www-data
     mode: '0600'
+  tags: [mediawiki, install]

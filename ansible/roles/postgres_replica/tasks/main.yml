@@ -1,75 +1,166 @@
 #roles/postrges_replica/tasks/main.yml
-- name: Установить gnupg
+---
+# ===== PGDG для focal: архивное зеркало + пиннинг только focal-pgdg =====
+
+- name: Choose PGDG host (archive for focal)
+  set_fact:
+    pgdg_host: "{{ 'apt-archive.postgresql.org' if ansible_distribution_release == 'focal' else 'apt.postgresql.org' }}"
+    pgdg_suite: "{{ ansible_distribution_release }}-pgdg"
+
+- name: Remove legacy PGDG list/sources
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/pgdg.list
+    - /etc/apt/sources.list.d/pgdg.sources
+
+- name: Purge PGDG lines from /etc/apt/sources.list
+  replace:
+    path: /etc/apt/sources.list
+    regexp: '^.*apt(-archive)?\.postgresql\.org.*\n'
+    replace: ''
+  ignore_errors: true
+
+- name: Remove any /etc/apt/sources.list.d/* referencing PGDG
+  shell: |
+    set -e
+    for f in /etc/apt/sources.list.d/*; do
+      [ -f "$f" ] || continue
+      if grep -Eq 'apt(-archive)?\.postgresql\.org' "$f"; then rm -f "$f"; fi
+    done
+  args: { executable: /bin/bash }
+
+- name: Wipe apt lists (pre-clean)
+  file:
+    path: /var/lib/apt/lists
+    state: absent
+
+- name: Ensure /var/lib/apt/lists exists
+  file:
+    path: /var/lib/apt/lists
+    state: directory
+    mode: '0755'
+
+- name: Install apt prerequisites
   apt:
-    name: gnupg
+    name:
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - curl
     state: present
+    update_cache: no
+
+- name: Force IPv4 for apt
+  copy:
+    dest: /etc/apt/apt.conf.d/99force-ipv4
+    mode: '0644'
+    content: |
+      Acquire::ForceIPv4 "true";
+
+- name: Install PostgreSQL signing key (keyring)
+  shell: |
+    set -e
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor > /usr/share/keyrings/postgresql.gpg
+  args:
+    creates: /usr/share/keyrings/postgresql.gpg
+
+- name: Pin PGDG to focal-pgdg only
+  copy:
+    dest: /etc/apt/preferences.d/pgdg.pref
+    mode: '0644'
+    content: |
+      Package: *
+      Pin: release n={{ pgdg_suite }}
+      Pin-Priority: 700
+
+      Package: *
+      Pin: release o=PostgreSQL
+      Pin-Priority: 600
+
+- name: Add PGDG repository (.sources, https, archive host)
+  copy:
+    dest: /etc/apt/sources.list.d/pgdg.sources
+    mode: '0644'
+    content: |
+      Types: deb
+      URIs: https://{{ pgdg_host }}/pub/repos/apt
+      Suites: {{ pgdg_suite }}
+      Components: main
+      Signed-By: /usr/share/keyrings/postgresql.gpg
+
+- name: apt update after PGDG
+  apt:
     update_cache: yes
 
-- name: Импортировать GPG-ключ репозитория PostgreSQL
-  apt_key:
-    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
-    state: present
+# ===== Установка и подготовка реплики =====
 
-- name: Добавить официальный репозиторий PostgreSQL
-  apt_repository:
-    repo: "deb http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
-    state: present
-    filename: "pgdg"
-
-- name: Обновить кеш пакетов
-  apt:
-    update_cache: yes
-
-- name: Установка PostgreSQL
+- name: Install PostgreSQL server & client
   apt:
     name:
       - "postgresql-{{ postgres_version }}"
       - "postgresql-contrib-{{ postgres_version }}"
+      - "postgresql-client-{{ postgres_version }}"   # для pg_basebackup
     state: present
 
-- name: Настройка hot_standby
+- name: Enable hot_standby
   lineinfile:
     path: "/etc/postgresql/{{ postgres_version }}/main/postgresql.conf"
     regexp: '^#?hot_standby'
     line: "hot_standby = on"
   notify: Restart PostgreSQL
 
-- name: Остановка PostgreSQL
+- name: Stop PostgreSQL
   systemd:
     name: postgresql
     state: stopped
 
-- name: Очистка каталога данных
-  become: true
+- name: Remove data directory before basebackup
   file:
     path: "{{ pg_data_dir }}"
     state: absent
 
-- name: Копирование базы с мастера через pg_basebackup
-  become: true
+- name: Run pg_basebackup from master
   shell: |
+    set -e
     PGPASSWORD="{{ replication_password }}" \
     pg_basebackup -h {{ master_host }} \
                   -D {{ pg_data_dir }} \
                   -U {{ replication_user }} \
                   -v -R
-  args:
-    executable: /bin/bash
+  args: { executable: /bin/bash }
 
-- name: Убедиться, что каталог принадлежит postgres
+- name: Ensure data dir ownership
   file:
     path: "{{ pg_data_dir }}"
     owner: postgres
     group: postgres
     recurse: yes
 
-- name: Разрешить доступ к базе для wikiuser
+- name: Allow app user to DB in pg_hba.conf
   lineinfile:
     path: "/etc/postgresql/{{ postgres_version }}/main/pg_hba.conf"
     line: "host {{ sysadmin_db }} {{ sysadmin_user }} 0.0.0.0/0 scram-sha-256"
     insertafter: EOF
 
-- name: Запуск PostgreSQL
+- name: Start PostgreSQL
   systemd:
     name: postgresql
     state: started
+
+# (опционально) Проверка policy
+- name: Verify apt-cache policy for target package (replica)
+  shell: "apt-cache policy postgresql-{{ postgres_version }}"
+  register: pg_policy_rep
+  changed_when: false
+
+- debug:
+    var: pg_policy_rep.stdout
+
+# ===== Handlers =====
+- name: Restart PostgreSQL
+  service:
+    name: postgresql
+    state: restarted
