@@ -11,7 +11,7 @@
     mediawiki_lang: "ru"
     mediawiki_admin_user: "{{ mediawiki_admin_user | default('admin') }}"
     mediawiki_admin_pass: "{{ mediawiki_admin_pass | default('ChangeMe!2025') }}"
-    mediawiki_server_url: "http://{{ hostvars['nginx-lb'].ansible_host }}/"
+    mediawiki_server_url: "http://{{ hostvars['nginx-lb'].ansible_host }}"
   tags: [mediawiki]
 
 - name: Install Apache, PHP and required modules

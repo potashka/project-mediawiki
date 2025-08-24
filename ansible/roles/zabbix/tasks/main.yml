@@ -480,6 +480,68 @@
   set_fact:
     zbx_hostid: "{{ (zbx_host.json.result | first).hostid }}"
 
+# === Получаем ID шаблона "Linux by Zabbix agent" и привязываем к текущему хосту ===
+- name: Zabbix API | Get template ID (Linux by Zabbix agent)
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    headers: { Content-Type: "application/json-rpc" }
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "template.get"
+      params:
+        output: ["templateid","host"]
+        filter:
+          host: ["Linux by Zabbix agent"]
+      auth: "{{ zbx_auth_token }}"
+      id: 2201
+  register: zbx_tpl_linux
+  changed_when: false
+
+- name: Fail if Linux template not found
+  fail:
+    msg: "В Zabbix не найден шаблон 'Linux by Zabbix agent'. Открой Configuration → Templates и сверь точное имя."
+  when: (zbx_tpl_linux.json.result | length) == 0
+
+- name: Set tpl_linux
+  set_fact:
+    tpl_linux: "{{ (zbx_tpl_linux.json.result | first).templateid }}"
+
+- name: Zabbix API | Link Linux template to current host
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    headers: { Content-Type: "application/json-rpc" }
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "host.update"
+      params:
+        hostid: "{{ zbx_hostid }}"
+        templates:
+          - { templateid: "{{ tpl_linux }}" }
+      auth: "{{ zbx_auth_token }}"
+      id: 2202
+
+# === Привязываем шаблоны к ТЕКУЩЕМУ хосту (nginx-lb по его hostid) ===
+- name: Zabbix API | Link templates to nginx-lb
+  uri:
+    url: "{{ zabbix_api_url }}/api_jsonrpc.php"
+    method: POST
+    headers: { Content-Type: "application/json-rpc" }
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      method: "host.update"
+      params:
+        hostid: "{{ zbx_hostid }}"
+        templates:
+          - { templateid: "{{ tpl_linux }}" }
+          # - { templateid: "{{ tpl_http }}" }
+      auth: "{{ zbx_auth_token }}"
+      id: 2002
+
 - name: Zabbix API | Check if webscenario exists
   uri:
     url: "{{ zabbix_api_url }}/api_jsonrpc.php"

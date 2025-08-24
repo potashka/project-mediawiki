@@ -1,28 +1,43 @@
-#roles/common/tasks/main.yml
+# roles/common/tasks/main.yml
 ---
+
 - name: Install Zabbix agent
   apt:
     name: zabbix-agent
     state: present
     update_cache: yes
 
+# Узнаём IP backup-zabbix из inventory
+- name: Set fact zbx_server_ip from inventory
+  set_fact:
+    zbx_server_ip: "{{ hostvars['backup-zabbix'].ansible_host | default('') }}"
+
+- name: Fail if zbx_server_ip is empty
+  fail:
+    msg: "Не удалось определить IP backup-zabbix (hostvars['backup-zabbix'].ansible_host). Проверь inventory.yaml"
+  when: zbx_server_ip | length == 0
+
+# Конфиг агента (пасcивные + активные чеки)
 - name: Set Zabbix agent passive Server
   lineinfile:
     path: /etc/zabbix/zabbix_agentd.conf
-    regexp: '^Server='
-    line: "Server={{ zabbix_agent_server | default('backup-zabbix') }}"
+    regexp: '^#?Server='
+    line: "Server={{ zbx_server_ip }},127.0.0.1"
+    create: yes
   notify: Restart Zabbix agent
 
 - name: Set Zabbix agent active ServerActive
   lineinfile:
     path: /etc/zabbix/zabbix_agentd.conf
-    regexp: '^ServerActive='
-    line: "ServerActive={{ zabbix_agent_server | default('backup-zabbix') }}"
+    regexp: '^#?ServerActive='
+    line: "ServerActive={{ zbx_server_ip }}"
+    create: yes
   notify: Restart Zabbix agent
 
 - name: Set Zabbix agent Hostname to inventory_hostname
   lineinfile:
     path: /etc/zabbix/zabbix_agentd.conf
-    regexp: '^Hostname='
+    regexp: '^#?Hostname='
     line: "Hostname={{ inventory_hostname }}"
+    create: yes
   notify: Restart Zabbix agent
