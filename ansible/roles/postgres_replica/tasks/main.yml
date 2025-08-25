@@ -1,6 +1,6 @@
 #roles/postrges_replica/tasks/main.yml
 ---
-# ===== PGDG для focal: архивное зеркало + пиннинг только focal-pgdg =====
+# PGDG для focal: архивное зеркало + пиннинг только focal-pgdg
 
 - name: Choose PGDG host (archive for focal)
   set_fact:
@@ -95,7 +95,7 @@
   apt:
     update_cache: yes
 
-# ===== Установка и подготовка реплики =====
+# Установка и подготовка реплики
 
 - name: Install PostgreSQL server & client
   apt:
@@ -159,8 +159,7 @@
 - debug:
     var: pg_policy_rep.stdout
 
-# ===== Handlers =====
-- name: Restart PostgreSQL
-  service:
-    name: postgresql
-    state: restarted
+#- name: Restart PostgreSQL
+#  service:
+#    name: postgresql
+#    state: restarted

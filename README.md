@@ -81,13 +81,33 @@ ansible-playbook site.yml
 
 ## 📈 Мониторинг (Zabbix)
 
-- Веб-интерфейс: `http://<ip_backup>/zabbix`
-- Логин: `Admin` / Пароль: `zabbix`
-- Мониторинг MediaWiki на уровне:
-  - доступности HTTP (код + задержка)
-  - состояния Zabbix-агентов на всех хостах
+- Zabbix поднимается вместе с PostgreSQL и Apache (всё кодом, без ручной настройки).
 
-👉 Добавить хосты вручную в интерфейсе, привязать шаблон `Template App HTTP Service`.
+- Ansible загружает схему в БД, кладёт конфиги (zabbix_server.conf, zabbix.conf.php).
+
+- Веб-интерфейс сразу доступен на http://<ip_backup>/zabbix.
+
+- Авторизация: Admin / zabbix.
+
+- Автоматически через API создаётся:
+
+  - hostgroup MediaWiki
+
+  - хост nginx-lb (с агентом и web scenario)
+
+  - web scenario проверки / MediaWiki
+
+- триггеры:
+
+  - HTTP code != 200 (CRIT)
+
+  - Response time > 2000 ms (WARN, avg 5m)
+
+  - Response time > 5000 ms (CRIT, avg 5m)
+
+✨ Можно расширять правила — через Ansible-шаблоны добавлять новые web-scenario и триггеры.
+
+👉 Можно добавить хосты вручную в интерфейсе, привязать шаблон `Template App HTTP Service`.
 
 ---
 
@@ -139,18 +159,25 @@ ansible/
 ├── site.yml
 ├── roles/
 │   ├── nginx/
-│   │   └── tasks/main.yml + files/nginx.conf
+│   │   ├── tasks/main.yml
+│   │   └── handlers/main.yml
 │   ├── mediawiki/
-│   │   └── tasks/main.yml
+│   │   ├── tasks/main.yml
+│   │   ├── handlers/main.yml
+│   │   └── templates/apache-vhost.j2
 │   ├── postgres/
-│   │   └── tasks/main.yml
+│   │   ├── tasks/main.yml
+│   │   └── handlers/main.yml
 │   ├── zabbix/
 │   │   ├── tasks/main.yml
-│   │   └── files/
-│   │       ├── backup_fs.sh
-│   │       └── backup_db.sh
+│   │   ├── handlers/main.yml
+│   │   └── templates/
+│   │       ├── backup_fs.sh.j2
+│   │       └── backup_db.sh.j2
 │   └── common/
-│       └── tasks/main.yml (установка zabbix-agent)
+│       ├── tasks/main.yml   (установка zabbix-agent)
+│       └── handlers/main.yml
+
 ```
 
 ---

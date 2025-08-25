@@ -1,10 +1,7 @@
----
 # roles/zabbix/tasks/main.yml
+---
 # Установка PostgreSQL для Zabbix, самого Zabbix, настройка бэкапов и Web Scenario/триггеров через Zabbix API
-
-# =========================
 #  PostgreSQL + Zabbix
-# =========================
 
 - name: Install PostgreSQL
   apt:
@@ -54,9 +51,7 @@
       - zabbix-agent
     state: present
 
-# =========================
 #  Zabbix server конфиг (доступ к БД)
-# =========================
 - name: Configure /etc/zabbix/zabbix_server.conf
   lineinfile:
     path: /etc/zabbix/zabbix_server.conf
@@ -69,7 +64,7 @@
     - { key: "DBPassword", val: "zabbix" }
   notify: Restart zabbix-server
 
-# --- Detect PG version and allow unsupported for PG<13 ---
+# Detect PG version and allow unsupported for PG<13
 
 - name: Detect PostgreSQL server version (numeric)
   become: true
@@ -86,9 +81,7 @@
   when: (pg_version_num.stdout | int) < 130000
   notify: Restart zabbix-server
 
-# =========================
 #  Zabbix WEB конфиг (zabbix.conf.php)
-# =========================
 - name: Ensure /etc/zabbix/web exists
   file:
     path: /etc/zabbix/web
@@ -132,7 +125,7 @@
     - Restart zabbix-server
     - Reload apache2
 
-# === Fix Postgres privileges for Zabbix ===
+# Fix Postgres privileges for Zabbix
 - name: Grant full privileges on DB/schema/objects to role zabbix
   shell: |
     set -e
@@ -206,9 +199,7 @@
     - fail:
         msg: "zabbix-server не стартовал. См. логи выше."
 
-# =========================
 #  SSH для бэкапов rsync
-# =========================
 
 - name: Ensure /root/.ssh exists on backup host
   file:
@@ -261,9 +252,7 @@
     bad_hosts: "{{ zbx_keyscan.results | selectattr('stdout','==','') | map(attribute='item') | list }}"
   when: zbx_keyscan is defined and (zbx_keyscan.results | selectattr('stdout','==','') | list | length) > 0
 
-# =========================
 #  Бэкапы (FS + DB)
-# =========================
 
 - name: Ensure rsync is installed (for FS backups)
   apt:
@@ -301,9 +290,7 @@
     - { name: "filesystem backup", script: "backup_fs.sh" }
     - { name: "database backup",  script: "backup_db.sh" }
 
-# =========================
 #  Zabbix API (Web Scenario)
-# =========================
 
 # Ждём именно API endpoint, а не просто корень /zabbix/
 - name: Wait until Zabbix API is reachable (200)
@@ -359,7 +346,7 @@
       учетные данные и заголовок Content-Type.
   when: zbx_auth_token == ''
 
-# === Ensure Zabbix host for web scenario exists ===
+# Ensure Zabbix host for web scenario exists
 - name: Set default hostgroup name (for nginx-lb)
   set_fact:
     zbx_hostgroup_name: "{{ zbx_hostgroup_name | default('MediaWiki') }}"
@@ -480,7 +467,7 @@
   set_fact:
     zbx_hostid: "{{ (zbx_host.json.result | first).hostid }}"
 
-# === Получаем ID шаблона "Linux by Zabbix agent" и привязываем к текущему хосту ===
+# Получаем ID шаблона "Linux by Zabbix agent" и привязываем к текущему хосту
 - name: Zabbix API | Get template ID (Linux by Zabbix agent)
   uri:
     url: "{{ zabbix_api_url }}/api_jsonrpc.php"
@@ -524,7 +511,7 @@
       auth: "{{ zbx_auth_token }}"
       id: 2202
 
-# === Привязываем шаблоны к ТЕКУЩЕМУ хосту (nginx-lb по его hostid) ===
+# Привязываем шаблоны к ТЕКУЩЕМУ хосту (nginx-lb по его hostid)
 - name: Zabbix API | Link templates to nginx-lb
   uri:
     url: "{{ zabbix_api_url }}/api_jsonrpc.php"
@@ -615,9 +602,7 @@
     status_code: 200
   when: zbx_ws.json.result | length > 0
 
-# =========================
 #  Zabbix API (Triggers)
-# =========================
 
 - name: Zabbix API | Get existing triggers for host
   uri:
@@ -689,7 +674,7 @@
         status_code: 200
       when: tr_existing | length > 0
 
-# ---- Trigger 2: Response time WARN ----
+# Trigger 2: Response time WARN
 - name: Ensure trigger Response time WARN exists/updated
   vars:
     tr_descr: "MediaWiki Front: response time > {{ zabbix_http_rt_warn_ms | default(2000) }} ms (avg 5m)"
@@ -734,7 +719,7 @@
         status_code: 200
       when: tr_existing | length > 0
 
-# ---- Trigger 3: Response time CRIT ----
+# Trigger 3: Response time CRIT
 - name: Ensure trigger Response time CRIT exists/updated
   vars:
     tr_descr: "MediaWiki Front: response time > {{ zabbix_http_rt_crit_ms | default(5000) }} ms (avg 5m)"

@@ -1,6 +1,6 @@
 # ansible/roles/postgres_master/tasks/main.yml
 ---
-# ===== PostgreSQL Master (Ubuntu 20.04 focal) =====
+# PostgreSQL Master (Ubuntu 20.04 focal)
 # Архивный PGDG + пиннинг только focal-pgdg, затем PG12 с md5-авторизацией
 
 # --- PGDG archive repo ---
