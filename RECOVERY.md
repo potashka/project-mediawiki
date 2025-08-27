@@ -67,7 +67,11 @@ sudo -u postgres psql -c "DROP DATABASE my_wiki;"
 
 🛠 Восстановление:
 ```bash
-gunzip -c /opt/backups/db/my_wiki_<дата>.sql.gz | sudo -u postgres psql my_wiki
+ sudo -u postgres psql -v ON_ERROR_STOP=1 -tc "SELECT 1 FROM pg_roles WHERE rolname='wikiuser';" | grep -q 1 || \
+>   sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE wikiuser LOGIN;"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE my_wiki OWNER wikiuser TEMPLATE template0 ENCODING 'UTF8';"
+gunzip -c /tmp/my_wiki.sql.gz | sudo -u postgres psql -v ON_ERROR_STOP=1 my_wiki
+
 ```
 
 
