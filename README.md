@@ -212,6 +212,117 @@ graph TD
 - Реализованы все элементы: отказоустойчивость, мониторинг, бэкап
 - Всё готово к демонстрации и реальному использованию
 
+## Шаблоны
+```
+# ansible/group_vars/all.yml
+
+#all.yml
+ansible_user: ubuntu
+ansible_ssh_private_key_file: ###
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+ansible_become: true
+postgres_version: ###
+pg_data_dir: ###
+
+replication_user: ###
+replication_password: ###
+
+mediawiki_version: ###
+sysadmin_user: ###
+sysadmin_password: ###
+sysadmin_db: ###
+
+master_host: "{{ hostvars['pg-master'].ansible_host }}"
+
+# Zabbix API 
+zabbix_api_url: "http://{{ hostvars['backup-zabbix'].ansible_host }}/zabbix"
+zabbix_api_user: ###
+zabbix_api_password: ###
+backup_ssh_known_hosts:
+  - "{{ hostvars['mediawiki-1'].ansible_host }}"
+  - "{{ hostvars['mediawiki-2'].ansible_host }}"
+
+# Параметры веб-проверки
+zabbix_http_check_name: "MediaWiki Front"
+zabbix_http_check_url: "http://{{ hostvars['nginx-lb'].ansible_host }}/"
+zabbix_http_check_delay: "1m"
+zabbix_http_check_timeout: "10s"
+zabbix_http_check_host: "nginx-lb"
+zabbix_http_rt_warn_ms: 2000
+zabbix_http_rt_crit_ms: 5000
+```
+
+
+# terraform/terraform.tfvars
+```yc_cloud_id   = 
+yc_folder_id  = 
+yc_zone       = 
+instance_image = 
+
+ssh_public_key = ###
+instance_user  = 
+service_account_key_file = 
+
+virtual_machines = {
+  "nginx" = {
+    vm_name   = "nginx-lb"
+    hostname  = "nginx-lb"
+    vm_cpu    = 2
+    ram       = 2
+    disk      = 30
+    disk_name = "nginx-disk"
+    role      = "nginx"
+  },
+  "mediawiki1" = {
+    vm_name   = "mediawiki-1"
+    hostname  = "mediawiki-1"
+    vm_cpu    = 2
+    ram       = 4
+    disk      = 30
+    disk_name = "mediawiki1-disk"
+    role      = "mediawiki"
+  },
+  "mediawiki2" = {
+    vm_name   = "mediawiki-2"
+    hostname  = "mediawiki-2"
+    vm_cpu    = 2
+    ram       = 4
+    disk      = 30
+    disk_name = "mediawiki2-disk"
+    role      = "mediawiki"
+  },
+  "pgmaster" = {
+    vm_name   = "pg-master"
+    hostname  = "pg-master"
+    vm_cpu    = 2
+    ram       = 4
+    disk      = 30
+    disk_name = "pgmaster-disk"
+    role      = "postgres"
+  },
+  "pgreplica" = {
+    vm_name   = "pg-replica"
+    hostname  = "pg-replica"
+    vm_cpu    = 2
+    ram       = 4
+    disk      = 30
+    disk_name = "pgreplica-disk"
+    role      = "postgres"
+  },
+  "zabbix" = {
+    vm_name   = "backup-zabbix"
+    hostname  = "backup-zabbix"
+    vm_cpu    = 2
+    ram       = 2
+    disk      = 30
+    disk_name = "zabbix-disk"
+    role      = "zabbix"
+  }
+}
+```
+
+
+
 ## Разработчики
 
 **Алексей Потанин**   [avpotanin@gmail.com](mailto:avpotanin@gmail.com)
