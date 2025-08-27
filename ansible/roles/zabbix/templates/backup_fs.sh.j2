@@ -14,15 +14,15 @@ mkdir -p "$DEST_BASE"
   {'name': 'mediawiki-2', 'ip': hostvars['mediawiki-2'].ansible_host}
 ] %}
 
-# Синхронизуем контент с обеих нод на backup-сервер
-for entry in {% raw %}{{{% endraw %}{% for n in nodes %}"{{ n.name }}@{{ n.ip }}"{% if not loop.last %},{% endif %}{% endfor %}{% raw %}}}{% endraw %}; do
+# НИКАКИХ { } и запятых — только пробелы между элементами!
+for entry in {% for n in nodes %}"{{ n.name }}@{{ n.ip }}"{% if not loop.last %} {% endif %}{% endfor %}; do
   NODE_NAME="${entry%@*}"
   NODE_IP="${entry#*@}"
   DEST_DIR="$DEST_BASE/${NODE_NAME}_${DATE}"
   mkdir -p "$DEST_DIR"
-  # ssh с отключенной проверкой ключа на случай чистой ВМ
-  # rsync -a --delete -e "ssh -o StrictHostKeyChecking=no" "ubuntu@${NODE_IP}:${SRC_DIR}/" "$DEST_DIR/"
-  rsync -a --delete -e "ssh" "ubuntu@${NODE_IP}:${SRC_DIR}/" "$DEST_DIR/"
+
+  # Если ключ ещё не в known_hosts, убираем вопрос по хост-ключу
+  rsync -a --delete -e "ssh -o StrictHostKeyChecking=no" "ubuntu@${NODE_IP}:${SRC_DIR}/" "$DEST_DIR/"
 done
 
 tar czf "$ARCHIVE_PATH" -C "$DEST_BASE" .
@@ -30,3 +30,4 @@ echo "[INFO] $(date -Is) Backup ФС создан: $ARCHIVE_PATH"
 
 # Retention: 14 дней
 find "$DEST_BASE" -type f -name '*.tar.gz' -mtime +14 -print -delete
+
