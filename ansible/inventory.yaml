@@ -4,22 +4,22 @@ all:
     nginx:
       hosts:
         nginx-lb:
-          ansible_host: 84.201.158.16
+          ansible_host: 158.160.113.203
     mediawiki:
       hosts:
         mediawiki-1:
-          ansible_host: 158.160.56.37
+          ansible_host: 158.160.118.93
         mediawiki-2:
-          ansible_host: 62.84.116.155
+          ansible_host: 158.160.112.133
     postgres_master:
       hosts:
         pg-master:
-          ansible_host: 46.21.246.37
+          ansible_host: 158.160.106.120
     postgres_replica:
       hosts:
         pg-replica:
-          ansible_host: 158.160.55.157
+          ansible_host: 158.160.98.88
     zabbix:
       hosts:
         backup-zabbix:
-          ansible_host: 158.160.49.218
+          ansible_host: 158.160.33.180

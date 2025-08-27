@@ -217,6 +217,17 @@
     group: root
     mode: '0600'
 
+- name: Normalize key newlines (strip CRLF)
+  shell: sed -i 's/\r$//g' /root/.ssh/id_rsa
+  args: { executable: /bin/bash }
+
+- name: Ensure permissions are strict on private key
+  file:
+    path: /root/.ssh/id_rsa
+    owner: root
+    group: root
+    mode: '0600'
+
 # Добавляем known_hosts корректно (сканим с backup-хоста)
 - name: Ensure openssh-client is installed (for ssh-keyscan)
   apt:
