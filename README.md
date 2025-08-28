@@ -325,5 +325,5 @@ virtual_machines = {
 
 ## Разработчики
 
-**Алексей Потанин**   [avpotanin@gmail.com](mailto:avpotanin@gmail.com)
-GitHub: [https://github.com/potashka](https://github.com/potashka)
+**Алексей Потанин**   [e-mail](mailto:avpotanin@gmail.com)
+GitHub: [project-mediawiki](https://github.com/potashka)
